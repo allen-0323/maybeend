@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ESP8266 GPS Tracker (Leaflet+MQTT)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- MQTT.js (瀏覽器用) -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .info {
+      position: absolute; top: 10px; left: 10px;
+      background: rgba(255,255,255,.9); padding: 8px 10px; border-radius: 6px;
+      font: 14px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC";
+      box-shadow: 0 2px 10px rgba(0,0,0,.1);
+    }
+    .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
+    .ok { background:#16a34a; } .bad { background:#ef4444; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="info">
+    <span id="connDot" class="dot bad"></span><b id="connText">未連線</b><br/>
+    Lat/Lng：<span id="latlng">—</span><br/>
+    速度：<span id="speed">—</span> km/h　高度：<span id="alt">—</span> m<br/>
+    時間(UTC)：<span id="ts">—</span>
+  </div>
+
+  <script>
+    // 1) 初始 Leaflet
+    const map = L.map('map').setView([0,0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    const marker = L.marker([0,0]).addTo(map).bindPopup('ESP8266 GPS');
+    const path = L.polyline([], { color: '#ef4444', weight: 3 }).addTo(map);
+
+    const $latlng = document.getElementById('latlng');
+    const $speed  = document.getElementById('speed');
+    const $alt    = document.getElementById('alt');
+    const $ts     = document.getElementById('ts');
+    const $dot    = document.getElementById('connDot');
+    const $connTx = document.getElementById('connText');
+
+    // 2) 連線到 MQTT WebSocket（EMQX 公共節點）
+    const url = 'wss://broker.emqx.io:8084/mqtt';
+    const client = mqtt.connect(url, {
+      connectTimeout: 4000,
+      clientId: 'web_' + Math.random().toString(16).slice(2),
+      // 如果你用需要帳密的 broker，加上：
+      // username: '你的帳號',
+      // password: '你的密碼',
+      clean: true,
+      keepalive: 30
+    });
+
+    client.on('connect', () => {
+      $dot.className = 'dot ok'; $connTx.textContent = '已連線';
+      client.subscribe('gps/device1', { qos: 0 });
+    });
+
+    client.on('reconnect', () => { $dot.className = 'dot bad'; $connTx.textContent = '重連中…'; });
+    client.on('close',     () => { $dot.className = 'dot bad'; $connTx.textContent = '連線關閉'; });
+    client.on('error',     (e) => { console.error(e); });
+
+    // 3) 收到座標就更新地圖
+    client.on('message', (topic, payload) => {
+      try {
+        const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
+        if (typeof lat !== 'number' || typeof lng !== 'number') return;
+
+        marker.setLatLng([lat, lng]);
+        path.addLatLng([lat, lng]);
+
+        // 第一次定位或偏移太大時移動鏡頭
+        if (path.getLatLngs().length <= 2) {
+          map.setView([lat, lng], 16);
+        } else {
+          map.panTo([lat, lng], { animate: true });
+        }
+
+        $latlng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
+        $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
+        $ts.textContent     = ts || '—';
+      } catch (err) {
+        console.warn('Invalid JSON:', err);
+      }
+    });
+  </script>
+</body>
+</html>
