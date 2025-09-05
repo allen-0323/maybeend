@@ -82,7 +82,7 @@ if (pts.length === 0) {
 } else {
   const last = pts[pts.length - 1];                 // 取最後一點
   const dist = L.latLng(lat, lng).distanceTo(last); // 計算距離 (公尺)
-  if (dist > 10) {
+  if (dist > 20) {
     path.addLatLng([lat, lng]);                     // 超過 10 公尺才加軌跡
   }
 }
@@ -109,6 +109,7 @@ if (path.getLatLngs().length <= 2) {
   </script>
 </body>
 </html>
+
 
 
 
