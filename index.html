@@ -31,84 +31,104 @@
   </div>
 
   <script>
-    // 1) 初始 Leaflet
-    const map = L.map('map').setView([23.5,121], 7);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-    const marker = L.marker([23.5,121]).addTo(map).bindPopup("GPS訊號源");
-    const path = L.polyline([], { color: '#ef4444', weight: 3 }).addTo(map);
+  const map = L.map('map').setView([23.5,121], 7);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const marker = L.marker([23.5,121]).addTo(map).bindPopup("GPS訊號源");
+  const path = L.polyline([], { color: '#ef4444', weight: 3 }).addTo(map);
 
-    const $latlng = document.getElementById('latlng');
-    const $speed  = document.getElementById('speed');
-    const $alt    = document.getElementById('alt');
-    const $ts     = document.getElementById('ts');
-    const $dot    = document.getElementById('connDot');
-    const $connTx = document.getElementById('connText');
+  const $latlng = document.getElementById('latlng');
+  const $speed  = document.getElementById('speed');
+  const $alt    = document.getElementById('alt');
+  const $ts     = document.getElementById('ts');
+  const $dot    = document.getElementById('connDot');
+  const $connTx = document.getElementById('connText');
 
-    // 2) 連線到 MQTT WebSocket（EMQX 公共節點）
-    const url = 'wss://broker.emqx.io:8084/mqtt';
-    const client = mqtt.connect(url, {
-      connectTimeout: 4000,
-      clientId: 'web_' + Math.random().toString(16).slice(2),
-      // 如果你用需要帳密的 broker，加上：
-      // username: '你的帳號',
-      // password: '你的密碼',
-      clean: true,
-      keepalive: 30
+  // 平滑化緩衝區
+  const smoothBuffer = [];
+  const bufferSize = 5; // 平滑用 5 筆
+
+  function smoothLatLng(lat, lng) {
+    smoothBuffer.push([lat, lng]);
+    if (smoothBuffer.length > bufferSize) smoothBuffer.shift();
+
+    let avgLat = 0, avgLng = 0;
+    smoothBuffer.forEach(p => {
+      avgLat += p[0];
+      avgLng += p[1];
     });
-
-    client.on('connect', () => {
-      $dot.className = 'dot ok'; $connTx.textContent = '已連線';
-      client.subscribe('gps/device1', { qos: 0 });
-    });
-
-    client.on('reconnect', () => { $dot.className = 'dot bad'; $connTx.textContent = '重連中…'; });
-    client.on('close',     () => { $dot.className = 'dot bad'; $connTx.textContent = '連線關閉'; });
-    client.on('error',     (e) => { console.error(e); });
-
-    // 3) 收到座標就更新地圖
-    client.on('message', (topic, payload) => {
-  try {
-    const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
-    if (typeof lat !== 'number' || typeof lng !== 'number') return;
-
-    marker.setLatLng([lat, lng]);
-
-    // === 新增的距離判斷 ===
- // === 新增的距離判斷 ===
-const pts = path.getLatLngs();
-if (pts.length === 0) {
-  // 第一次，直接加入
-  path.addLatLng([lat, lng]);
-} else {
-  const last = pts[pts.length - 1];                 // 取最後一點
-  const dist = L.latLng(lat, lng).distanceTo(last); // 計算距離 (公尺)
-  if (dist > 20) {
-    path.addLatLng([lat, lng]);                     // 超過 10 公尺才加軌跡
+    return [avgLat / smoothBuffer.length, avgLng / smoothBuffer.length];
   }
-}
 
-// === 優化後的地圖跟隨 ===
-if (path.getLatLngs().length <= 2) {
-  map.setView([lat, lng], 18); // 第一次定位時直接置中並放大
-} else {
-  map.panTo([lat, lng], { animate: true }); // 之後平滑移動
-}
+  // 2) 連線到 MQTT WebSocket（EMQX 公共節點）
+  const url = 'wss://broker.emqx.io:8084/mqtt';
+  const client = mqtt.connect(url, {
+    connectTimeout: 4000,
+    clientId: 'web_' + Math.random().toString(16).slice(2),
+    clean: true,
+    keepalive: 30
+  });
 
-    // === 更新資訊欄 ===
-    $latlng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-    $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
-    $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
-    $ts.textContent     = ts || '—';
+  client.on('connect', () => {
+    $dot.className = 'dot ok'; $connTx.textContent = '已連線';
+    client.subscribe('gps/device1', { qos: 0 });
+  });
 
-  } catch (err) {
-    console.warn('Invalid JSON:', err);
-  }
+  client.on('reconnect', () => { $dot.className = 'dot bad'; $connTx.textContent = '重連中…'; });
+  client.on('close',     () => { $dot.className = 'dot bad'; $connTx.textContent = '連線關閉'; });
+  client.on('error',     (e) => { console.error(e); });
+
+  // 3) 收到座標就更新地圖
+  client.on('message', (topic, payload) => {
+    try {
+      const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
+      if (typeof lat !== 'number' || typeof lng !== 'number') return;
+
+      // === 速度過濾 (小於 1 km/h 視為靜止，不更新) ===
+      if (typeof spd === 'number' && spd < 1) {
+        return;
+      }
+
+      // === 平滑化座標 ===
+      const [sLat, sLng] = smoothLatLng(lat, lng);
+
+      marker.setLatLng([sLat, sLng]);
+
+      // === 軌跡判斷 (超過 10 公尺才加入) ===
+      const pts = path.getLatLngs();
+      if (pts.length === 0) {
+        path.addLatLng([sLat, sLng]);
+      } else {
+        const last = pts[pts.length - 1];
+        const dist = L.latLng(sLat, sLng).distanceTo(last);
+        if (dist > 20) {
+          path.addLatLng([sLat, sLng]);
+        }
+      }
+
+      // === 地圖跟隨 ===
+      if (path.getLatLngs().length <= 2) {
+        map.setView([sLat, sLng], 18);
+      } else {
+        map.panTo([sLat, sLng], { animate: true });
+      }
+
+      // === 更新資訊欄 ===
+      $latlng.textContent = `${sLat.toFixed(6)}, ${sLng.toFixed(6)}`;
+      $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
+      $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
+      $ts.textContent     = ts || '—';
+
+    } catch (err) {
+      console.warn('Invalid JSON:', err);
+    }
+  
 
 
     });
   </script>
 </body>
 </html>
+
 
 
 
