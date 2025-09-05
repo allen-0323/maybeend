@@ -74,24 +74,25 @@
     marker.setLatLng([lat, lng]);
 
     // === 新增的距離判斷 ===
-    const pts = path.getLatLngs();
-    if (pts.length === 0) {
-      // 第一次，直接加入
-      path.addLatLng([lat, lng]);
-    } else {
-      const last = pts[pts.length - 1];               // 取最後一點
-      const dist = L.latLng(lat, lng).distanceTo(last); // 計算距離 (公尺)
-      if (dist > 10) {
-        path.addLatLng([lat, lng]);                   // 超過 10 公尺才加軌跡
-      }
-    }
+ // === 新增的距離判斷 ===
+const pts = path.getLatLngs();
+if (pts.length === 0) {
+  // 第一次，直接加入
+  path.addLatLng([lat, lng]);
+} else {
+  const last = pts[pts.length - 1];                 // 取最後一點
+  const dist = L.latLng(lat, lng).distanceTo(last); // 計算距離 (公尺)
+  if (dist > 10) {
+    path.addLatLng([lat, lng]);                     // 超過 10 公尺才加軌跡
+  }
+}
 
-    // === 原本的地圖跟隨 ===
-    if (pts.length <= 2) {
-      map.setView([lat, lng], 18);
-    } else {
-      map.panTo([lat, lng], { animate: true });
-    }
+// === 優化後的地圖跟隨 ===
+if (path.getLatLngs().length <= 2) {
+  map.setView([lat, lng], 18); // 第一次定位時直接置中並放大
+} else {
+  map.panTo([lat, lng], { animate: true }); // 之後平滑移動
+}
 
     // === 更新資訊欄 ===
     $latlng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
@@ -108,6 +109,7 @@
   </script>
 </body>
 </html>
+
 
 
 
