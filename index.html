@@ -76,7 +76,7 @@
 
         // 第一次定位或偏移太大時移動鏡頭
         if (path.getLatLngs().length <= 2) {
-          map.setView([lat, lng], 16);
+          map.setView([lat, lng], 18);
         } else {
           map.panTo([lat, lng], { animate: true });
         }
@@ -92,4 +92,5 @@
   </script>
 </body>
 </html>
+
 
