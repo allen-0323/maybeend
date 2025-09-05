@@ -67,30 +67,47 @@
 
     // 3) 收到座標就更新地圖
     client.on('message', (topic, payload) => {
-      try {
-        const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
-        if (typeof lat !== 'number' || typeof lng !== 'number') return;
+  try {
+    const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
+    if (typeof lat !== 'number' || typeof lng !== 'number') return;
 
-        marker.setLatLng([lat, lng]);
-        path.addLatLng([lat, lng]);
+    marker.setLatLng([lat, lng]);
 
-        // 第一次定位或偏移太大時移動鏡頭
-        if (path.getLatLngs().length <= 2) {
-          map.setView([lat, lng], 18);
-        } else {
-          map.panTo([lat, lng], { animate: true });
-        }
-
-        $latlng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-        $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
-        $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
-        $ts.textContent     = ts || '—';
-      } catch (err) {
-        console.warn('Invalid JSON:', err);
+    // === 新增的距離判斷 ===
+    const pts = path.getLatLngs();
+    if (pts.length === 0) {
+      // 第一次，直接加入
+      path.addLatLng([lat, lng]);
+    } else {
+      const last = pts[pts.length - 1];               // 取最後一點
+      const dist = L.latLng(lat, lng).distanceTo(last); // 計算距離 (公尺)
+      if (dist > 10) {
+        path.addLatLng([lat, lng]);                   // 超過 10 公尺才加軌跡
       }
+    }
+
+    // === 原本的地圖跟隨 ===
+    if (pts.length <= 2) {
+      map.setView([lat, lng], 18);
+    } else {
+      map.panTo([lat, lng], { animate: true });
+    }
+
+    // === 更新資訊欄 ===
+    $latlng.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
+    $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
+    $ts.textContent     = ts || '—';
+
+  } catch (err) {
+    console.warn('Invalid JSON:', err);
+  }
+
+
     });
   </script>
 </body>
 </html>
+
 
 
