@@ -13,21 +13,23 @@
     html, body, #map { height: 100%; margin: 0; }
     .info {
       position: absolute; top: 10px; left: 10px;
-      background: rgba(255,255,255,.9); padding: 8px 10px; border-radius: 6px;
-      font: 14px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC";
+      background: rgba(255,255,255,.9); padding: 10px 12px; border-radius: 6px;
+      font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans TC";
       box-shadow: 0 2px 10px rgba(0,0,0,.1);
     }
     .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
     .ok { background:#16a34a; } .bad { background:#ef4444; }
+    .info-row { margin: 4px 0; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div class="info">
-    <span id="connDot" class="dot bad"></span><b id="connText">未連線</b><br/>
-    Lat/Lng：<span id="latlng">—</span><br/>
-    速度：<span id="speed">—</span> km/h　高度：<span id="alt">—</span> m<br/>
-    時間(UTC)：<span id="ts">—</span>
+    <div class="info-row"><span id="connDot" class="dot bad"></span><b id="connText">未連線</b></div>
+    <div class="info-row">Lat/Lng：<span id="latlng">—</span></div>
+    <div class="info-row">速度：<span id="speed">—</span> km/h</div>
+    <div class="info-row">高度：<span id="alt">—</span> m</div>
+    <div class="info-row">時間(UTC)：<span id="ts">—</span></div>
   </div>
 
   <script>
@@ -46,20 +48,15 @@
   // 平滑化緩衝區
   const smoothBuffer = [];
   const bufferSize = 5; // 平滑用 5 筆
-
   function smoothLatLng(lat, lng) {
     smoothBuffer.push([lat, lng]);
     if (smoothBuffer.length > bufferSize) smoothBuffer.shift();
-
     let avgLat = 0, avgLng = 0;
-    smoothBuffer.forEach(p => {
-      avgLat += p[0];
-      avgLng += p[1];
-    });
+    smoothBuffer.forEach(p => { avgLat += p[0]; avgLng += p[1]; });
     return [avgLat / smoothBuffer.length, avgLng / smoothBuffer.length];
   }
 
-  // 2) 連線到 MQTT WebSocket（EMQX 公共節點）
+  // 連線到 MQTT WebSocket
   const url = 'wss://broker.emqx.io:8084/mqtt';
   const client = mqtt.connect(url, {
     connectTimeout: 4000,
@@ -72,47 +69,40 @@
     $dot.className = 'dot ok'; $connTx.textContent = '已連線';
     client.subscribe('gps/device1', { qos: 0 });
   });
-
   client.on('reconnect', () => { $dot.className = 'dot bad'; $connTx.textContent = '重連中…'; });
   client.on('close',     () => { $dot.className = 'dot bad'; $connTx.textContent = '連線關閉'; });
   client.on('error',     (e) => { console.error(e); });
 
-  // 3) 收到座標就更新地圖
+  let firstUpdate = true; // 第一次更新地圖 flag
+
+  // 收到座標更新
   client.on('message', (topic, payload) => {
     try {
       const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
       if (typeof lat !== 'number' || typeof lng !== 'number') return;
 
-      // === 速度過濾 (小於 1 km/h 視為靜止，不更新) ===
-      if (typeof spd === 'number' && spd < 1) {
-        return;
-      }
+      // 速度過濾 (小於 1 km/h 視為靜止)
+      if (typeof spd === 'number' && spd < 1) return;
 
-      // === 平滑化座標 ===
+      // 平滑化座標
       const [sLat, sLng] = smoothLatLng(lat, lng);
-
       marker.setLatLng([sLat, sLng]);
 
-      // === 軌跡判斷 (超過 10 公尺才加入) ===
+      // 軌跡判斷 (超過 20 公尺才加入)
       const pts = path.getLatLngs();
-      if (pts.length === 0) {
+      if (pts.length === 0 || L.latLng(sLat, sLng).distanceTo(pts[pts.length - 1]) > 20) {
         path.addLatLng([sLat, sLng]);
-      } else {
-        const last = pts[pts.length - 1];
-        const dist = L.latLng(sLat, sLng).distanceTo(last);
-        if (dist > 20) {
-          path.addLatLng([sLat, sLng]);
-        }
       }
 
-      // === 地圖跟隨 ===
-      if (path.getLatLngs().length <= 2) {
-        map.setView([sLat, sLng], 18);
+      // 地圖跟隨
+      if (firstUpdate) {
+        map.setView([sLat, sLng], 18); // 第一次更新才 zoom 到座標
+        firstUpdate = false;
       } else {
         map.panTo([sLat, sLng], { animate: true });
       }
 
-      // === 更新資訊欄 ===
+      // 更新資訊欄
       $latlng.textContent = `${sLat.toFixed(6)}, ${sLng.toFixed(6)}`;
       $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
       $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
@@ -121,17 +111,7 @@
     } catch (err) {
       console.warn('Invalid JSON:', err);
     }
-  
-
-
-    });
+  });
   </script>
 </body>
 </html>
-
-
-
-
-
-
-
