@@ -7,7 +7,7 @@
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <!-- MQTT.js (瀏覽器用) -->
+  <!-- MQTT.js -->
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     html, body, #map { height: 100%; margin: 0; }
@@ -20,6 +20,17 @@
     .dot { width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; }
     .ok { background:#16a34a; } .bad { background:#ef4444; }
     .info-row { margin: 4px 0; }
+
+    /* 回到定位按鈕 */
+    .locate-btn {
+      position: absolute; bottom: 20px; right: 20px;
+      background: #2563eb; color: #fff;
+      padding: 8px 12px; border-radius: 6px;
+      font-size: 14px; cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,.3);
+      user-select: none;
+    }
+    .locate-btn:hover { background: #1e40af; }
   </style>
 </head>
 <body>
@@ -31,6 +42,7 @@
     <div class="info-row">高度：<span id="alt">—</span> m</div>
     <div class="info-row">時間(UTC)：<span id="ts">—</span></div>
   </div>
+  <div class="locate-btn" id="locateBtn">📍 回到定位</div>
 
   <script>
   const map = L.map('map').setView([23.5,121], 7);
@@ -44,10 +56,11 @@
   const $ts     = document.getElementById('ts');
   const $dot    = document.getElementById('connDot');
   const $connTx = document.getElementById('connText');
+  const $locateBtn = document.getElementById('locateBtn');
 
   // 平滑化緩衝區
   const smoothBuffer = [];
-  const bufferSize = 5; // 平滑用 5 筆
+  const bufferSize = 5;
   function smoothLatLng(lat, lng) {
     smoothBuffer.push([lat, lng]);
     if (smoothBuffer.length > bufferSize) smoothBuffer.shift();
@@ -56,7 +69,7 @@
     return [avgLat / smoothBuffer.length, avgLng / smoothBuffer.length];
   }
 
-  // 連線到 MQTT WebSocket
+  // MQTT
   const url = 'wss://broker.emqx.io:8084/mqtt';
   const client = mqtt.connect(url, {
     connectTimeout: 4000,
@@ -73,7 +86,8 @@
   client.on('close',     () => { $dot.className = 'dot bad'; $connTx.textContent = '連線關閉'; });
   client.on('error',     (e) => { console.error(e); });
 
-  let firstUpdate = true; // 第一次更新地圖 flag
+  let firstUpdate = true;
+  let lastPos = null; // 紀錄最新 GPS 位置
 
   // 收到座標更新
   client.on('message', (topic, payload) => {
@@ -81,28 +95,22 @@
       const { lat, lng, spd, alt, ts } = JSON.parse(payload.toString());
       if (typeof lat !== 'number' || typeof lng !== 'number') return;
 
-      // 速度過濾 (小於 1 km/h 視為靜止)
       if (typeof spd === 'number' && spd < 1) return;
 
-      // 平滑化座標
       const [sLat, sLng] = smoothLatLng(lat, lng);
-      marker.setLatLng([sLat, sLng]);
+      lastPos = [sLat, sLng];
+      marker.setLatLng(lastPos);
 
-      // 軌跡判斷 (超過 20 公尺才加入)
       const pts = path.getLatLngs();
       if (pts.length === 0 || L.latLng(sLat, sLng).distanceTo(pts[pts.length - 1]) > 20) {
-        path.addLatLng([sLat, sLng]);
+        path.addLatLng(lastPos);
       }
 
-      // 地圖跟隨
       if (firstUpdate) {
-        map.setView([sLat, sLng], 18); // 第一次更新才 zoom 到座標
+        map.setView(lastPos, 18);
         firstUpdate = false;
-      } else {
-        map.panTo([sLat, sLng], { animate: true });
       }
 
-      // 更新資訊欄
       $latlng.textContent = `${sLat.toFixed(6)}, ${sLng.toFixed(6)}`;
       $speed.textContent  = (typeof spd === 'number') ? spd.toFixed(2) : '—';
       $alt.textContent    = (typeof alt === 'number') ? alt.toFixed(1) : '—';
@@ -110,6 +118,15 @@
 
     } catch (err) {
       console.warn('Invalid JSON:', err);
+    }
+  });
+
+  // 按鈕 → 回到 GPS 位置
+  $locateBtn.addEventListener('click', () => {
+    if (lastPos) {
+      map.setView(lastPos, 18, { animate: true });
+    } else {
+      alert("尚未收到 GPS 訊號");
     }
   });
   </script>
