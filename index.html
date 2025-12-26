@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>ESP32 + ESP8266 GPS Tracker (Average)</title>
+  <title>ESP32 + ESP8266 GPS Tracker (Auto Select)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
@@ -58,7 +58,7 @@ const map = L.map('map',{zoomControl:false}).setView([23.5,121],7);
 L.control.zoom({position:'bottomright'}).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
 
-const marker = L.marker([23.5,121]).addTo(map).bindPopup("GPS 平均位置");
+const marker = L.marker([23.5,121]).addTo(map).bindPopup("GPS 定位位置");
 const path = L.polyline([], { color:'#ef4444', weight:3 }).addTo(map);
 
 const $ = id => document.getElementById(id);
@@ -67,42 +67,44 @@ const TIMEOUT = 5000;
 let firstUpdate = true;
 let lastPos = null;
 
-// 注意：esp8266 對應 gps/device1
 const sources = {
   esp32: null,
   esp8266: null
 };
 
-// 平滑
-const buf=[], BUF_SIZE=5;
-function smooth(lat,lng){
-  buf.push([lat,lng]);
-  if(buf.length>BUF_SIZE) buf.shift();
-  let a=0,b=0;
-  buf.forEach(p=>{a+=p[0];b+=p[1];});
-  return [a/buf.length,b/buf.length];
+// 平滑平均
+const buf = [], BUF_SIZE = 5;
+function smooth(lat, lng) {
+  buf.push([lat, lng]);
+  if (buf.length > BUF_SIZE) buf.shift();
+  let a = 0, b = 0;
+  buf.forEach(p => { a += p[0]; b += p[1]; });
+  return [a / buf.length, b / buf.length];
 }
 
-function alive(src){ return src && Date.now()-src.t < TIMEOUT; }
+function alive(src) {
+  return src && Date.now() - src.t < TIMEOUT;
+}
 
-const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt',{
-  clientId:'web_'+Math.random().toString(16).slice(2),
-  clean:true, keepalive:30
+const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+  clientId: 'web_' + Math.random().toString(16).slice(2),
+  clean: true,
+  keepalive: 30
 });
 
-client.on('connect',()=>{
-  $('connDot').className='dot ok';
-  $('connText').textContent='已連線';
-  client.subscribe(['gps/esp32','gps/device1']);
+client.on('connect', () => {
+  $('connDot').className = 'dot ok';
+  $('connText').textContent = '已連線';
+  client.subscribe(['gps/esp32', 'gps/device1']);
 });
 
-client.on('message',(topic,payload)=>{
+client.on('message', (topic, payload) => {
   const d = JSON.parse(payload.toString());
-  if(typeof d.lat!=='number'||typeof d.lng!=='number') return;
-  const now = Date.now();
+  if (typeof d.lat !== 'number' || typeof d.lng !== 'number') return;
 
-  if(topic==='gps/esp32')    sources.esp32   = { ...d, t: now };
-  if(topic==='gps/device1') sources.esp8266 = { ...d, t: now };
+  const now = Date.now();
+  if (topic === 'gps/esp32')    sources.esp32   = { ...d, t: now };
+  if (topic === 'gps/device1') sources.esp8266 = { ...d, t: now };
 
   const a32 = alive(sources.esp32);
   const a66 = alive(sources.esp8266);
@@ -110,42 +112,59 @@ client.on('message',(topic,payload)=>{
   $('esp32Status').textContent   = a32 ? '🟢 在線' : '🔴 離線';
   $('esp8266Status').textContent = a66 ? '🟢 在線' : '🔴 離線';
 
-  if(!(a32 && a66)){
+  let useLat = null, useLng = null;
+
+  if (a32 && a66) {
+    const p32 = L.latLng(sources.esp32.lat, sources.esp32.lng);
+    const p66 = L.latLng(sources.esp8266.lat, sources.esp8266.lng);
+    $('errDist').textContent = p32.distanceTo(p66).toFixed(1);
+
+    useLat = (sources.esp32.lat + sources.esp8266.lat) / 2;
+    useLng = (sources.esp32.lng + sources.esp8266.lng) / 2;
+
+  } else if (a32) {
+    $('errDist').textContent = '—';
+    useLat = sources.esp32.lat;
+    useLng = sources.esp32.lng;
+
+  } else if (a66) {
+    $('errDist').textContent = '—';
+    useLat = sources.esp8266.lat;
+    useLng = sources.esp8266.lng;
+
+  } else {
     $('errDist').textContent = '—';
     return;
   }
 
-  const p32 = L.latLng(sources.esp32.lat, sources.esp32.lng);
-  const p66 = L.latLng(sources.esp8266.lat, sources.esp8266.lng);
-  $('errDist').textContent = p32.distanceTo(p66).toFixed(1);
-
-  const avgLat = (sources.esp32.lat + sources.esp8266.lat) / 2;
-  const avgLng = (sources.esp32.lng + sources.esp8266.lng) / 2;
-  const [sLat,sLng] = smooth(avgLat, avgLng);
-
-  lastPos = [sLat,sLng];
+  const [sLat, sLng] = smooth(useLat, useLng);
+  lastPos = [sLat, sLng];
   marker.setLatLng(lastPos);
 
-  if(path.getLatLngs().length===0 ||
-     L.latLng(sLat,sLng).distanceTo(path.getLatLngs().slice(-1)[0]) > 20){
+  if (
+    path.getLatLngs().length === 0 ||
+    L.latLng(sLat, sLng).distanceTo(path.getLatLngs().slice(-1)[0]) > 20
+  ) {
     path.addLatLng(lastPos);
   }
 
-  if(firstUpdate){
-    map.setView(lastPos,18);
-    firstUpdate=false;
+  if (firstUpdate) {
+    map.setView(lastPos, 18);
+    firstUpdate = false;
   }
+
+  const srcCount = (a32 ? 1 : 0) + (a66 ? 1 : 0);
 
   $('latlng').textContent = `${sLat.toFixed(6)}, ${sLng.toFixed(6)}`;
   $('speed').textContent =
-    (((sources.esp32.spd||0)+(sources.esp8266.spd||0))/2).toFixed(2);
+    (((sources.esp32?.spd || 0) + (sources.esp8266?.spd || 0)) / srcCount).toFixed(2);
   $('alt').textContent =
-    (((sources.esp32.alt||0)+(sources.esp8266.alt||0))/2).toFixed(1);
+    (((sources.esp32?.alt || 0) + (sources.esp8266?.alt || 0)) / srcCount).toFixed(1);
   $('ts').textContent = d.ts || '—';
 });
 
-$('locateBtn').onclick = ()=>{
-  if(lastPos) map.setView(lastPos,18,{animate:true});
+$('locateBtn').onclick = () => {
+  if (lastPos) map.setView(lastPos, 18, { animate: true });
 };
 </script>
 </body>
